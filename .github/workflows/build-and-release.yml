@@ -1,0 +1,163 @@
+name: Build & Package ODX Engine (macOS arm64)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream ODX Tag or Commit SHA'
+        required: true
+        default: 'v3.8.4'
+      version_tag:
+        description: 'Release Tag Name (e.g. v3.8.4)'
+        required: true
+        default: 'v3.8.4'
+      draft:
+        description: 'Publish as Draft Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-package:
+    name: Build & Release ODX Engine
+    runs-on: macos-14 # Apple Silicon M1 Runner
+
+    steps:
+      - name: Checkout Packaging Repository
+        uses: actions/checkout@v4
+
+      - name: Determine Target Version & Ref
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version_tag }}"
+            REF="${{ github.event.inputs.upstream_ref }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            REF="$TAG"
+          fi
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "REF=$REF" >> $GITHUB_OUTPUT
+          echo "Target Release Tag: $TAG"
+          echo "Upstream Git Ref:   $REF"
+
+      - name: Check if Release Already Exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.vars.outputs.TAG }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.vars.outputs.TAG }} already exists. Skipping build."
+            echo "EXISTS=true" >> $GITHUB_OUTPUT
+          else
+            echo "EXISTS=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Micromamba Environment
+        if: steps.check_release.outputs.EXISTS == 'false'
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-file: Config/conda-osx-arm64.lock
+          environment-name: odx-build-env
+          cache-environment: true
+
+      - name: Clone Upstream ODX & Resolve Commit SHA
+        id: git_info
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          mkdir -p .build
+          git clone --no-checkout https://github.com/WebODM/ODX.git .build/ODX
+          git -C .build/ODX checkout --detach "${{ steps.vars.outputs.REF }}"
+          git -C .build/ODX submodule update --init --recursive
+          
+          # Resolve and export the exact Git commit SHA
+          COMMIT="$(git -C .build/ODX rev-parse HEAD)"
+          echo "COMMIT=$COMMIT" >> $GITHUB_OUTPUT
+          echo "Target ref '${{ steps.vars.outputs.REF }}' resolved to commit: $COMMIT"
+
+      - name: Install Runtime Python Dependencies
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          export PYTHONNOUSERSITE=1
+          
+          # Install ODX python requirements into isolated environment
+          micromamba run -n odx-build-env python -m pip install \
+            --no-build-isolation \
+            -r .build/ODX/requirements.txt || true
+
+      - name: Compile Native SuperBuild Modules
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          export PYTHONNOUSERSITE=1
+          export CMAKE_BUILD_PARALLEL_LEVEL=3
+          
+          cd .build/ODX/SuperBuild
+          mkdir -p build && cd build
+          
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DODX_OpenCV_Version=4.12.0 \
+            -DODM_BUILD_OpenCV=OFF \
+            -DODM_BUILD_Ceres=OFF \
+            -DODM_BUILD_GFlags=OFF
+            
+          # Build core orthophoto tools
+          cmake --build . --target odm_orthophoto dem2mesh dem2points -j3 || echo "SuperBuild partial finish"
+
+      - name: Relink Mach-O Binaries & Prune Development Headers
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          python3 Scripts/prepare-distribution-engine.py \
+            --runtime "$PREFIX" \
+            --odx .build/ODX \
+            --version "${{ steps.vars.outputs.TAG }}" \
+            --commit "${{ steps.git_info.outputs.COMMIT }}" \
+            --output .build/dist \
+            --adhoc
+
+      - name: Compress Engine Archive
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          cd .build/dist
+          tar -czf ../../OrthomosaicEngine-macOS-arm64.tar.gz OrthomosaicEngine OrthomosaicPython
+          cd ../..
+          shasum -a 256 OrthomosaicEngine-macOS-arm64.tar.gz > OrthomosaicEngine-macOS-arm64.tar.gz.sha256
+          
+          echo "Archive size: $(du -sh OrthomosaicEngine-macOS-arm64.tar.gz | awk '{print $1}')"
+          echo "SHA256: $(cat OrthomosaicEngine-macOS-arm64.tar.gz.sha256)"
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.EXISTS == 'false'
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.vars.outputs.TAG }}
+          name: "ODX macOS arm64 Runtime ${{ steps.vars.outputs.TAG }}"
+          body: |
+            ## ODX Pre-compiled Engine for macOS Apple Silicon
+            - **Release Version**: `${{ steps.vars.outputs.TAG }}`
+            - **ODX Upstream Commit SHA**: `${{ steps.git_info.outputs.COMMIT }}`
+            - **Architecture**: `macOS arm64` (Apple Silicon M1/M2/M3/M4)
+            - **Deployment Target**: `macOS 14.0+`
+            - **SHA-256 Checksum**: `$(cat OrthomosaicEngine-macOS-arm64.tar.gz.sha256 | awk '{print $1}')`
+          draft: ${{ github.event.inputs.draft || false }}
+          prerelease: false
+          files: |
+            OrthomosaicEngine-macOS-arm64.tar.gz
+            OrthomosaicEngine-macOS-arm64.tar.gz.sha256

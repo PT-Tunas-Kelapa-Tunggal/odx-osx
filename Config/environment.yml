@@ -1,0 +1,30 @@
+name: odx-build-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - cmake
+  - ninja
+  - pkg-config
+  - llvm-openmp
+  - gdal>=3.8.4
+  - proj
+  - geos
+  - eigen
+  - ceres-solver
+  - boost-cpp
+  - cgal-cpp
+  - tbb
+  - opencv
+  - laszip
+  - pdal
+  - numpy>=2.0,<3.0
+  - scipy
+  - shapely
+  - rasterio
+  - fiona
+  - pyproj
+  - pillow
+  - pyyaml
+  - joblib

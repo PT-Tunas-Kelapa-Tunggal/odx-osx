@@ -1,0 +1,27 @@
+# Build and packaging artifacts
+.build/
+dist/
+*.tar.gz
+*.tar.gz.sha256
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Temporary files
+*.swp
+*.swo
+*~

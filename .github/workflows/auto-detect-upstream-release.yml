@@ -1,0 +1,79 @@
+name: Auto-Detect Upstream ODX Releases
+
+on:
+  schedule:
+    # Checks once every 24 hours at 00:00 UTC
+    - cron: '0 0 * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual one-click: "Check for new releases now"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  detect-and-build:
+    name: Check Upstream Tags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Packaging Repo
+        uses: actions/checkout@v4
+
+      - name: Find New Upstream Release Tags Above Threshold
+        id: detector
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. Read lower version threshold (defaults to v3.8.4)
+          MIN_VERSION="v3.8.4"
+          if [ -f Config/min-upstream-version.txt ]; then
+            MIN_VERSION="$(cat Config/min-upstream-version.txt | tr -d '[:space:]')"
+          fi
+          echo "Current app baseline threshold: $MIN_VERSION"
+
+          # 2. Fetch official release tags from upstream WebODM/ODX (filtering out dereferenced tags '^{}')
+          UPSTREAM_TAGS=$(git ls-remote --tags https://github.com/WebODM/ODX.git | awk '{print $2}' | sed 's#refs/tags/##' | grep -v '\^{}' | grep -E '^v[0-9]+' || true)
+          echo "Found upstream tags:"
+          echo "$UPSTREAM_TAGS"
+
+          # 3. Fetch existing release tags in this repository
+          OUR_RELEASES=$(gh release list --limit 100 --json tagName --jq '.[].tagName' || true)
+          echo "Existing repository releases:"
+          echo "$OUR_RELEASES"
+
+          # 4. Filter tags: must not already be built, AND must be >= MIN_VERSION
+          NEW_TAGS=()
+          for tag in $UPSTREAM_TAGS; do
+            # Check if already built
+            if echo "$OUR_RELEASES" | grep -qx "$tag"; then
+              continue
+            fi
+
+            # Check if tag is at least MIN_VERSION using semver comparison
+            IS_HIGHER=$(python3 -c "import sys, re; parse = lambda v: tuple(map(int, re.findall(r'\d+', v))) if re.findall(r'\d+', v) else (0,); print('true' if parse(sys.argv[2]) >= parse(sys.argv[1]) else 'false')" "$MIN_VERSION" "$tag")
+
+            if [ "$IS_HIGHER" = "true" ]; then
+              echo ">>> Candidate tag $tag meets/exceeds threshold $MIN_VERSION. Queuing build."
+              NEW_TAGS+=("$tag")
+            else
+              echo "--- Skipping legacy tag $tag (below threshold $MIN_VERSION)"
+            fi
+          done
+
+          # Output as comma-separated list
+          echo "NEW_TAGS=$(IFS=,; echo "${NEW_TAGS[*]}")" >> $GITHUB_OUTPUT
+
+      - name: Trigger Automated Release Build
+        if: steps.detector.outputs.NEW_TAGS != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IFS=',' read -r -a tags <<< "${{ steps.detector.outputs.NEW_TAGS }}"
+          for tag in "${tags[@]}"; do
+            echo "Auto-triggering build for upstream tag: $tag"
+            gh workflow run build-and-release.yml \
+              -f version_tag="$tag" \
+              -f upstream_ref="$tag"
+          done
