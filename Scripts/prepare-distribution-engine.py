@@ -114,7 +114,7 @@ def main():
             'python', 'python3', 'python3.10', 'python3.11', 'python3.12',
             'gdalwarp', 'gdal_translate', 'gdalinfo', 'ogr2ogr',
             'odm_orthophoto', 'dem2mesh', 'dem2points', 'poissonrecon',
-            'lastools', 'las2las', 'lasinfo', 'fastrasterfilter'
+            'lastools', 'las2las', 'lasinfo', 'fastrasterfilter', 'opensfm'
         }
         for entry in bin_dir.iterdir():
             if entry.name not in allowed_bins and not entry.name.startswith('python3.'):

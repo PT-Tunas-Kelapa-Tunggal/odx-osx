@@ -54,21 +54,17 @@ jobs:
           echo "Target Release Tag: $TAG"
           echo "Upstream Git Ref:   $REF"
 
-      - name: Check if Release Already Exists
+      - name: Check & Clean Existing Release
         id: check_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.overwrite }}" = "true" ]; then
-            echo "Overwrite requested for release ${{ steps.vars.outputs.TAG }}."
-            gh release delete "${{ steps.vars.outputs.TAG }}" --yes || true
-            echo "EXISTS=false" >> $GITHUB_OUTPUT
-          elif gh release view "${{ steps.vars.outputs.TAG }}" >/dev/null 2>&1; then
-            echo "Release ${{ steps.vars.outputs.TAG }} already exists. Skipping build."
-            echo "EXISTS=true" >> $GITHUB_OUTPUT
-          else
-            echo "EXISTS=false" >> $GITHUB_OUTPUT
+          TAG="${{ steps.vars.outputs.TAG }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists on GitHub. Deleting to publish fresh replacement."
+            gh release delete "$TAG" --yes --cleanup-tag=false || true
           fi
+          echo "EXISTS=false" >> $GITHUB_OUTPUT
 
       - name: Setup Micromamba Environment
         if: steps.check_release.outputs.EXISTS == 'false'
@@ -109,7 +105,59 @@ jobs:
           PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           export PYTHONNOUSERSITE=1
           export CMAKE_BUILD_PARALLEL_LEVEL=3
+          export CMAKE_PREFIX_PATH="$PREFIX"
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
+          # 1. Patch SuperBuild to cleanly register pre-installed conda native libraries
+          python3 -c "
+          from pathlib import Path
           
+          setup_cmake = Path('.build/ODX/SuperBuild/cmake/ExternalProject-Setup.cmake')
+          new_setup = '''set(ADD_INTERNAL_LIB_MSG \"--- Adding internal version\")
+          set(FORCE_BUILD_LIB_MSG \"force build \${ADD_INTERNAL_LIB_MSG}\")
+          cmake_policy(SET CMP0135 NEW)
+
+          macro(SETUP_EXTERNAL_PROJECT name version force_build)
+            if(NOT \${force_build})
+              find_package(\${name} QUIET)
+              if(\${\${name}_FOUND})
+                message(STATUS \"\${name} found via system/conda\")
+                set(\${name}_DIR \${\${name}_DIR})
+                string(TOLOWER \"\${name}\" _name_lower)
+                if(NOT TARGET \${_name_lower})
+                  add_custom_target(\${_name_lower})
+                endif()
+              else()
+                include(External-\${name})
+              endif()
+            else()
+              include(External-\${name})
+            endif()
+          endmacro()
+
+          macro(SETUP_EXTERNAL_PROJECT_CUSTOM name)
+            include(External-\${name})
+          endmacro()
+          '''
+          setup_cmake.write_text(new_setup)
+          
+          sb_cmake = Path('.build/ODX/SuperBuild/CMakeLists.txt')
+          sb_content = sb_cmake.read_text()
+          dummy_targets = '''
+          foreach(dep opencv ceres gflags)
+            if(NOT TARGET \${dep})
+              add_custom_target(\${dep})
+            endif()
+          endforeach()
+          '''
+          sb_content = sb_content.replace(
+              'SETUP_EXTERNAL_PROJECT(Ceres \${ODM_Ceres_Version} \${ODM_BUILD_Ceres})',
+              'SETUP_EXTERNAL_PROJECT(Ceres \${ODM_Ceres_Version} \${ODM_BUILD_Ceres})\n' + dummy_targets
+          )
+          sb_cmake.write_text(sb_content)
+          "
+
+          # 2. Configure SuperBuild and compile core tools
           cd .build/ODX/SuperBuild
           mkdir -p build && cd build
           
@@ -117,14 +165,29 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$PREFIX" \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DODX_OpenCV_Version=4.12.0 \
             -DODM_BUILD_OpenCV=OFF \
             -DODM_BUILD_Ceres=OFF \
             -DODM_BUILD_GFlags=OFF
             
-          # Build core orthophoto tools
           cmake --build . --target odm_orthophoto dem2mesh dem2points -j3 || echo "SuperBuild partial finish"
+
+          # 3. Setup OpenSfM in ODX SuperBuild tree
+          cd ../../../..
+          mkdir -p .build/ODX/SuperBuild/install/bin
+          if [ ! -d ".build/ODX/SuperBuild/install/bin/opensfm" ]; then
+            git clone --depth 1 https://github.com/WebODM/OpenSfM.git .build/ODX/SuperBuild/install/bin/opensfm
+            git -C .build/ODX/SuperBuild/install/bin/opensfm submodule update --init --recursive
+          fi
+
+          micromamba run -n odx-build-env /usr/bin/env \
+            CC=/usr/bin/clang CXX=/usr/bin/clang++ LD=/usr/bin/ld \
+            CFLAGS="-O2 -fPIC -I$PREFIX/include" \
+            CXXFLAGS="-O2 -fPIC -stdlib=libc++ -I$PREFIX/include" \
+            LDFLAGS="-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib -fuse-ld=/usr/bin/ld" \
+            CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_LINKER=/usr/bin/ld -DCMAKE_AR=/usr/bin/ar -DCMAKE_RANLIB=/usr/bin/ranlib -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
+            python -m pip install --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
       - name: Smoke Test ODX Environment & CLI
         if: steps.check_release.outputs.EXISTS == 'false'
