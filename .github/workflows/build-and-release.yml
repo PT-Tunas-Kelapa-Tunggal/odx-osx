@@ -94,8 +94,9 @@ jobs:
           PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           export PYTHONNOUSERSITE=1
           
-          # Install and verify all pure-Python and build requirements
+          # Install and verify all pure-Python and build requirements without overriding conda-forge native packages
           micromamba run -n odx-build-env python -m pip install \
+            --no-deps \
             scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4
 
           # Immediate verification: Ensure every required module is importable right now
@@ -345,37 +346,37 @@ jobs:
           mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
           cp -R .build/ODX/SuperBuild/install/bin/opensfm/opensfm/* "$PREFIX/lib/python3.10/site-packages/opensfm/"
 
-      # - name: Smoke Test ODX Environment & CLI
-      #   if: steps.check_release.outputs.EXISTS == 'false'
-      #   run: |
-      #     echo "=== Testing ODX core Python imports ==="
-      #     micromamba run -n odx-build-env python -c "
-      #     import sys
-      #     sys.path.insert(0, '.build/ODX')
-      #     sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
-      #     import rasterio
-      #     import cv2
-      #     import numpy
-      #     import scipy
-      #     import PIL
-      #     import yaml
-      #     import shapely
-      #     import pyproj
-      #     import opensfm
-      #     from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
-      #     print('OpenSfM extension modules verified successfully!')
-      #     import pillow_jxl
-      #     print('pillow_jxl verified successfully!')
-      #     import onnxruntime
-      #     print('onnxruntime verified successfully!')
-      #     import codem
-      #     print('codem verified successfully!')
-      #     from stages.odm_app import ODMApp
-      #     print('ODX imports verified successfully!')
-      #     "
-      #     echo "=== Testing ODX entrypoint execution ==="
-      #     micromamba run -n odx-build-env python .build/ODX/run.py --help > /dev/null
-      #     echo "ODX CLI smoke test passed!"
+      - name: Smoke Test ODX Environment & CLI
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          echo "=== Testing ODX core Python imports ==="
+          micromamba run -n odx-build-env python -c "
+          import sys
+          sys.path.insert(0, '.build/ODX')
+          sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
+          import rasterio
+          import cv2
+          import numpy
+          import scipy
+          import PIL
+          import yaml
+          import shapely
+          import pyproj
+          import opensfm
+          from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
+          print('OpenSfM extension modules verified successfully!')
+          import pillow_jxl
+          print('pillow_jxl verified successfully!')
+          import onnxruntime
+          print('onnxruntime verified successfully!')
+          import codem
+          print('codem verified successfully!')
+          from stages.odm_app import ODMApp
+          print('ODX imports verified successfully!')
+          "
+          echo "=== Testing ODX entrypoint execution ==="
+          micromamba run -n odx-build-env python .build/ODX/run.py --help > /dev/null
+          echo "ODX CLI smoke test passed!"
 
       - name: Relink Mach-O Binaries & Prune Development Headers
         if: steps.check_release.outputs.EXISTS == 'false'
@@ -388,6 +389,16 @@ jobs:
             --commit "${{ steps.git_info.outputs.COMMIT }}" \
             --output .build/dist \
             --adhoc
+
+          echo "=== Testing Packaged Standalone Engine Python Runtime ==="
+          .build/dist/OrthomosaicEngine/environment/bin/python -c "
+          import cv2
+          print('  [+] Standalone cv2 imported successfully from:', cv2.__file__)
+          from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
+          print('  [+] Standalone OpenSfM extensions imported successfully!')
+          from stages.odm_app import ODMApp
+          print('  [+] Standalone ODMApp imported successfully!')
+          "
 
       - name: Compress Engine Archive
         if: steps.check_release.outputs.EXISTS == 'false'

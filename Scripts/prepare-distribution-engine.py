@@ -148,6 +148,54 @@ def main():
             except Exception as e:
                 print(f"  Warning: Could not process symlink {link}: {e}")
 
+    # Relocate OpenCV cv2 configuration scripts to ensure standalone portability
+    print("  Relocating OpenCV (cv2) loader configuration...")
+    cv2_dirs = list(dest_env.glob('lib/python3.*/site-packages/cv2'))
+    for cv2_dir in cv2_dirs:
+        if cv2_dir.is_dir():
+            for cfg in cv2_dir.glob('config*.py'):
+                try:
+                    text = cfg.read_text(encoding='utf-8')
+                    if str(original_prefix) in text:
+                        text = text.replace(str(original_prefix), str(dest_env))
+                        cfg.write_text(text, encoding='utf-8')
+                        print(f"    Patched prefix in {cfg.name}")
+                except Exception as e:
+                    print(f"    Warning: Could not patch {cfg}: {e}")
+
+            config_py = cv2_dir / 'config.py'
+            relocatable_loader = """
+# Auto-injected relocatable extension search paths for standalone distribution
+import os
+LOADER_DIR = os.path.dirname(os.path.abspath(__file__))
+_extra_ext_paths = [
+    os.path.join(LOADER_DIR, 'python-3'),
+    os.path.join(LOADER_DIR, 'python-3.10'),
+    os.path.join(LOADER_DIR, 'python-3.11'),
+    os.path.join(LOADER_DIR, 'python-3.12'),
+    LOADER_DIR,
+]
+PYTHON_EXTENSIONS_PATHS = _extra_ext_paths + [
+    p for p in globals().get('PYTHON_EXTENSIONS_PATHS', []) if p not in _extra_ext_paths
+]
+_extra_bin_paths = [
+    os.path.abspath(os.path.join(LOADER_DIR, '../../..')),
+    os.path.abspath(os.path.join(LOADER_DIR, '../../../lib')),
+    os.path.abspath(os.path.join(LOADER_DIR, '../../../bin')),
+]
+BINARIES_PATHS = _extra_bin_paths + [
+    p for p in globals().get('BINARIES_PATHS', []) if p not in _extra_bin_paths
+]
+"""
+            if config_py.exists():
+                content = config_py.read_text(encoding='utf-8')
+                if 'Auto-injected relocatable extension search paths' not in content:
+                    config_py.write_text(content + '\n' + relocatable_loader, encoding='utf-8')
+                    print(f"    Injected relocatable extension paths into {config_py.name}")
+            else:
+                config_py.write_text(relocatable_loader, encoding='utf-8')
+                print(f"    Created relocatable {config_py.name}")
+
     # 6. Relink Mach-O binaries to @loader_path and codesign
     print("[6/7] Rewriting Mach-O rpaths to relative @loader_path and signing...")
     binaries = [p for p in engine_dir.rglob('*') if is_macho(p)]
@@ -175,6 +223,8 @@ def main():
     <key>com.apple.security.app-sandbox</key>
     <true/>
     <key>com.apple.security.inherit</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 </dict>
 </plist>

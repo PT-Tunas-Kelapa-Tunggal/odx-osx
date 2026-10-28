@@ -125,6 +125,7 @@ echo "[+] Upstream resolved to commit: $COMMIT"
 echo ""
 echo "=== [2/6] Installing Runtime Dependencies & Build Backends ==="
 micromamba run -p "$PREFIX" python -m pip install \
+  --no-deps \
   scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4
 
 echo "=== Verifying runtime python module availability ==="
@@ -417,6 +418,16 @@ if [ "$DO_PACKAGE" = true ]; then
     --commit "$COMMIT" \
     --output .build/dist \
     --adhoc
+
+  echo "=== Testing Packaged Standalone Engine Python Runtime ==="
+  .build/dist/OrthomosaicEngine/environment/bin/python -c "
+  import cv2
+  print('  [+] Standalone cv2 imported successfully from:', cv2.__file__)
+  from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
+  print('  [+] Standalone OpenSfM extensions imported successfully!')
+  from stages.odm_app import ODMApp
+  print('  [+] Standalone ODMApp imported successfully!')
+  "
 
   cd .build/dist
   tar -czf ../../OrthomosaicEngine-macOS-arm64.tar.gz OrthomosaicEngine OrthomosaicPython
