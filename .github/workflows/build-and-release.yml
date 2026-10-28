@@ -111,7 +111,27 @@ jobs:
           export OpenMP_ROOT="$PREFIX"
           export MACOSX_DEPLOYMENT_TARGET=14.0
 
-          # 1. Patch SuperBuild to cleanly register pre-installed conda native libraries and configure compilers
+          # 1. Pre-clone and patch dem2mesh directly using Python (bypassing CMake PATCH_COMMAND / sed issues)
+          mkdir -p .build/ODX/SuperBuild/src/dem2mesh
+          if [ ! -f ".build/ODX/SuperBuild/src/dem2mesh/CMakeLists.txt" ]; then
+            git clone https://github.com/WebODM/dem2mesh.git .build/ODX/SuperBuild/src/dem2mesh
+            git -C .build/ODX/SuperBuild/src/dem2mesh checkout 623c8536941175c630fabe4f1352ddc314d98120
+          fi
+
+          python3 -c "
+          from pathlib import Path
+          d2m = Path('.build/ODX/SuperBuild/src/dem2mesh/CMakeLists.txt')
+          if d2m.exists():
+              c = d2m.read_text()
+              target = 'set(CMAKE_EXE_LINKER_FLAGS \"\${CMAKE_EXE_LINKER_FLAGS} -fopenmp\")'
+              replacement = 'set(CMAKE_EXE_LINKER_FLAGS \"\${CMAKE_EXE_LINKER_FLAGS} -L$PREFIX/lib -lomp\")'
+              if target in c:
+                  c = c.replace(target, replacement)
+                  d2m.write_text(c)
+                  print('  [+] Successfully patched dem2mesh/CMakeLists.txt for Apple Clang OpenMP linking')
+          "
+
+          # 2. Patch SuperBuild to cleanly register pre-installed conda native libraries and configure compilers
           python3 -c "
           from pathlib import Path
           
@@ -174,10 +194,10 @@ jobs:
               apple_cmake_patch + '\n    if (NOT APPLE_CMAKE_ARGS)'
           )
 
-          # Patch dem2mesh to use PATCH_COMMAND replacing invalid -fopenmp linker flag with -L<prefix>/lib -lomp
+          # Set DOWNLOAD_COMMAND and UPDATE_COMMAND empty for dem2mesh to use pre-cloned patched version
           sb_content = sb_content.replace(
-              'SOURCE_DIR        \${SB_SOURCE_DIR}/dem2mesh\n    CMAKE_ARGS',
-              'SOURCE_DIR        \${SB_SOURCE_DIR}/dem2mesh\n    PATCH_COMMAND     sed -i.bak -e \"s|LINKER_FLAGS} -fopenmp|LINKER_FLAGS} -L\${CMAKE_PREFIX_PATH}/lib -lomp|g\" <SOURCE_DIR>/CMakeLists.txt\n    CMAKE_ARGS'
+              'externalproject_add(dem2mesh\n    GIT_REPOSITORY    https://github.com/WebODM/dem2mesh.git\n    GIT_TAG           623c8536941175c630fabe4f1352ddc314d98120',
+              'externalproject_add(dem2mesh\n    DOWNLOAD_COMMAND  \"\"\n    UPDATE_COMMAND    \"\"'
           )
 
           # Ensure odm_orthophoto receives APPLE_CMAKE_ARGS so OpenMP is located

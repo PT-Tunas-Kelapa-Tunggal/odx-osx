@@ -22,8 +22,25 @@ odx-osx/
 │   ├── environment.yml                   # Human-readable conda environment spec
 │   └── Helper.entitlements               # App Sandbox child entitlements
 ├── Scripts/
+│   ├── local-build-test.sh               # Local build and test runner (mirrors CI)
 │   └── prepare-distribution-engine.py    # Mach-O relinker, pruner, codesigner, and packager
 └── README.md
+```
+
+## Local Testing & Verification
+
+You can verify the entire build, compilation, and smoke tests locally on an Apple Silicon Mac before pushing:
+
+```bash
+# 1. Create the micromamba build environment (one-time setup)
+export MAMBA_ROOT_PREFIX="$HOME/.micromamba"
+micromamba create -n odx-build-env -f Config/environment.yml -y
+
+# 2. Run the localized test build
+./Scripts/local-build-test.sh --ref v3.8.4
+
+# Optional: also run binary relinking and packaging
+./Scripts/local-build-test.sh --ref v3.8.4 --package
 ```
 
 ## Workflows
