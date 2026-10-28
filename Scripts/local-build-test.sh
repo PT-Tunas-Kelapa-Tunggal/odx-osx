@@ -388,8 +388,8 @@ find "$PREFIX/lib/python3.10/site-packages/opensfm" -name "*.so" -exec codesign 
 # 8. Smoke Tests
 echo ""
 echo "=== Running Smoke Tests ==="
-# Increase stack limit to prevent OpenMP stack overflow / bus error on macOS arm64
-ulimit -s 65536
+# Increase stack limit to max allowed to prevent OpenMP stack overflow / bus error on macOS arm64
+ulimit -s $(ulimit -Hs) 2>/dev/null || true
 
 # Ensure all staged .so modules are ad-hoc signed
 find .build/ODX/SuperBuild/install/bin/opensfm -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
@@ -447,7 +447,7 @@ if [ "$DO_PACKAGE" = true ]; then
     --adhoc
 
   echo "=== Testing Packaged Standalone Engine Python Runtime ==="
-  ulimit -s 65536
+  ulimit -s $(ulimit -Hs) 2>/dev/null || true
   .build/dist/OrthomosaicEngine/environment/bin/python -u -c "
   import cv2
   print('  [+] Standalone cv2 imported successfully from:', cv2.__file__, flush=True)
