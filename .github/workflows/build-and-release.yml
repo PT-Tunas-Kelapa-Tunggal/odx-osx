@@ -103,12 +103,15 @@ jobs:
         if: steps.check_release.outputs.EXISTS == 'false'
         run: |
           PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          REPO_ROOT="$(pwd)"
           export PYTHONNOUSERSITE=1
           export CMAKE_BUILD_PARALLEL_LEVEL=3
           export CMAKE_PREFIX_PATH="$PREFIX"
           export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export OpenMP_ROOT="$PREFIX"
+          export MACOSX_DEPLOYMENT_TARGET=14.0
 
-          # 1. Patch SuperBuild to cleanly register pre-installed conda native libraries
+          # 1. Patch SuperBuild to cleanly register pre-installed conda native libraries and configure compilers
           python3 -c "
           from pathlib import Path
           
@@ -143,6 +146,8 @@ jobs:
           
           sb_cmake = Path('.build/ODX/SuperBuild/CMakeLists.txt')
           sb_content = sb_cmake.read_text()
+
+          # Inject dummy targets for pre-installed conda libraries
           dummy_targets = '''
           foreach(dep opencv ceres gflags)
             if(NOT TARGET \${dep})
@@ -154,6 +159,33 @@ jobs:
               'SETUP_EXTERNAL_PROJECT(Ceres \${ODM_Ceres_Version} \${ODM_BUILD_Ceres})',
               'SETUP_EXTERNAL_PROJECT(Ceres \${ODM_Ceres_Version} \${ODM_BUILD_Ceres})\n' + dummy_targets
           )
+
+          # Ensure APPLE_CMAKE_ARGS passes conda paths and OpenMP flags to subprojects
+          apple_cmake_patch = '''
+              set(APPLE_CMAKE_ARGS
+                  -DCMAKE_PREFIX_PATH=\${CMAKE_PREFIX_PATH}
+                  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+                  -DOpenMP_ROOT=\${CMAKE_PREFIX_PATH}
+                  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+              )
+          '''
+          sb_content = sb_content.replace(
+              'if (NOT APPLE_CMAKE_ARGS)',
+              apple_cmake_patch + '\n    if (NOT APPLE_CMAKE_ARGS)'
+          )
+
+          # Patch dem2mesh to use PATCH_COMMAND replacing invalid -fopenmp linker flag with -L<prefix>/lib -lomp
+          sb_content = sb_content.replace(
+              'SOURCE_DIR        \${SB_SOURCE_DIR}/dem2mesh\n    CMAKE_ARGS',
+              'SOURCE_DIR        \${SB_SOURCE_DIR}/dem2mesh\n    PATCH_COMMAND     sed -i.bak -e \"s|LINKER_FLAGS} -fopenmp|LINKER_FLAGS} -L\${CMAKE_PREFIX_PATH}/lib -lomp|g\" <SOURCE_DIR>/CMakeLists.txt\n    CMAKE_ARGS'
+          )
+
+          # Ensure odm_orthophoto receives APPLE_CMAKE_ARGS so OpenMP is located
+          sb_content = sb_content.replace(
+              'PREFIX            \${SB_BINARY_DIR}/odm_orthophoto\n    SOURCE_DIR        \${SB_SOURCE_DIR}/odm_orthophoto\n    CMAKE_ARGS        -DCMAKE_INSTALL_PREFIX:PATH=\${SB_INSTALL_DIR}\n                      \${WIN32_CMAKE_ARGS} \${WIN32_GDAL_ARGS}\n)',
+              'PREFIX            \${SB_BINARY_DIR}/odm_orthophoto\n    SOURCE_DIR        \${SB_SOURCE_DIR}/odm_orthophoto\n    CMAKE_ARGS        -DCMAKE_INSTALL_PREFIX:PATH=\${SB_INSTALL_DIR}\n                      \${WIN32_CMAKE_ARGS} \${WIN32_GDAL_ARGS}\n                      \${APPLE_CMAKE_ARGS}\n)'
+          )
+
           sb_cmake.write_text(sb_content)
           "
 
@@ -165,28 +197,50 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$PREFIX" \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DOpenMP_ROOT="$PREFIX" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DODM_BUILD_OpenCV=OFF \
             -DODM_BUILD_Ceres=OFF \
             -DODM_BUILD_GFlags=OFF
             
-          cmake --build . --target odm_orthophoto dem2mesh dem2points -j3 || echo "SuperBuild partial finish"
+          cmake --build . --target odm_orthophoto dem2mesh dem2points -j3
 
           # 3. Setup OpenSfM in ODX SuperBuild tree
-          cd ../../../..
+          cd "$REPO_ROOT"
           mkdir -p .build/ODX/SuperBuild/install/bin
-          if [ ! -d ".build/ODX/SuperBuild/install/bin/opensfm" ]; then
+          if [ ! -f ".build/ODX/SuperBuild/install/bin/opensfm/setup.py" ]; then
+            echo "Cloning OpenSfM into .build/ODX/SuperBuild/install/bin/opensfm..."
+            rm -rf .build/ODX/SuperBuild/install/bin/opensfm
             git clone --depth 1 https://github.com/WebODM/OpenSfM.git .build/ODX/SuperBuild/install/bin/opensfm
             git -C .build/ODX/SuperBuild/install/bin/opensfm submodule update --init --recursive
           fi
+
+          # Patch OpenSfM setup.py to forward CMAKE_ARGS to cmake configuration
+          python3 -c "
+          from pathlib import Path
+          setup_file = Path('.build/ODX/SuperBuild/install/bin/opensfm/setup.py')
+          if setup_file.exists():
+              text = setup_file.read_text()
+              if 'import shlex' not in text:
+                  text = text.replace('import subprocess', 'import subprocess\nimport shlex')
+                  text = text.replace(
+                      'cmake_command = [',
+                      'cmake_command = [\"cmake\"] + shlex.split(os.environ.get(\"CMAKE_ARGS\", \"\")) + ['
+                  )
+                  text = text.replace(
+                      '[\"cmake\"] + shlex.split(os.environ.get(\"CMAKE_ARGS\", \"\")) + [\n        \"cmake\",',
+                      '[\"cmake\"] + shlex.split(os.environ.get(\"CMAKE_ARGS\", \"\")) + ['
+                  )
+                  setup_file.write_text(text)
+          "
 
           micromamba run -n odx-build-env /usr/bin/env \
             CC=/usr/bin/clang CXX=/usr/bin/clang++ LD=/usr/bin/ld \
             CFLAGS="-O2 -fPIC -I$PREFIX/include" \
             CXXFLAGS="-O2 -fPIC -stdlib=libc++ -I$PREFIX/include" \
             LDFLAGS="-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib -fuse-ld=/usr/bin/ld" \
-            CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_LINKER=/usr/bin/ld -DCMAKE_AR=/usr/bin/ar -DCMAKE_RANLIB=/usr/bin/ranlib -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
+            CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_LINKER=/usr/bin/ld -DCMAKE_AR=/usr/bin/ar -DCMAKE_RANLIB=/usr/bin/ranlib -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DOPENSFM_BUILD_TESTS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
             python -m pip install --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
       - name: Smoke Test ODX Environment & CLI
