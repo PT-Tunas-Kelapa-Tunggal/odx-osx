@@ -28,3 +28,10 @@ dependencies:
   - pillow
   - pyyaml
   - joblib
+  - scikit-image
+  - matplotlib
+  - lxml
+  - beautifulsoup4
+  - trimesh
+  - xmltodict
+  - packaging

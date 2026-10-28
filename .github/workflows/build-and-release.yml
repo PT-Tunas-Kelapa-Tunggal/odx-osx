@@ -14,6 +14,10 @@ on:
         description: 'Release Tag Name (e.g. v3.8.4)'
         required: true
         default: 'v3.8.4'
+      overwrite:
+        description: 'Overwrite existing release with same tag'
+        type: boolean
+        default: true
       draft:
         description: 'Publish as Draft Release'
         type: boolean
@@ -55,7 +59,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${{ steps.vars.outputs.TAG }}" >/dev/null 2>&1; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.overwrite }}" = "true" ]; then
+            echo "Overwrite requested for release ${{ steps.vars.outputs.TAG }}."
+            gh release delete "${{ steps.vars.outputs.TAG }}" --yes || true
+            echo "EXISTS=false" >> $GITHUB_OUTPUT
+          elif gh release view "${{ steps.vars.outputs.TAG }}" >/dev/null 2>&1; then
             echo "Release ${{ steps.vars.outputs.TAG }} already exists. Skipping build."
             echo "EXISTS=true" >> $GITHUB_OUTPUT
           else
@@ -66,7 +74,7 @@ jobs:
         if: steps.check_release.outputs.EXISTS == 'false'
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: Config/conda-osx-arm64.lock
+          environment-file: Config/environment.yml
           environment-name: odx-build-env
           cache-environment: true
 
@@ -90,10 +98,10 @@ jobs:
           PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           export PYTHONNOUSERSITE=1
           
-          # Install ODX python requirements into isolated environment
+          # Install pure-Python dependencies without overriding conda-forge native packages
           micromamba run -n odx-build-env python -m pip install \
-            --no-build-isolation \
-            -r .build/ODX/requirements.txt || true
+            --no-deps \
+            ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib
 
       - name: Compile Native SuperBuild Modules
         if: steps.check_release.outputs.EXISTS == 'false'
@@ -117,6 +125,28 @@ jobs:
             
           # Build core orthophoto tools
           cmake --build . --target odm_orthophoto dem2mesh dem2points -j3 || echo "SuperBuild partial finish"
+
+      - name: Smoke Test ODX Environment & CLI
+        if: steps.check_release.outputs.EXISTS == 'false'
+        run: |
+          echo "=== Testing ODX core Python imports ==="
+          micromamba run -n odx-build-env python -c "
+          import sys
+          sys.path.insert(0, '.build/ODX')
+          import rasterio
+          import cv2
+          import numpy
+          import scipy
+          import PIL
+          import yaml
+          import shapely
+          import pyproj
+          from stages.odm_app import ODMApp
+          print('ODX imports verified successfully!')
+          "
+          echo "=== Testing ODX entrypoint execution ==="
+          micromamba run -n odx-build-env python .build/ODX/run.py --help > /dev/null
+          echo "ODX CLI smoke test passed!"
 
       - name: Relink Mach-O Binaries & Prune Development Headers
         if: steps.check_release.outputs.EXISTS == 'false'
