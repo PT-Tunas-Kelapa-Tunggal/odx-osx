@@ -106,6 +106,24 @@ def main():
                     shutil.copy2(item, dest_lib / item.name)
                     print(f"  Staged SuperBuild library: {item.name}")
 
+        opensfm_pkg = sb_install / 'bin' / 'opensfm' / 'opensfm'
+        if opensfm_pkg.is_dir():
+            for sp_dir in dest_env.glob('lib/python3.*/site-packages'):
+                if sp_dir.is_dir():
+                    for pth in sp_dir.glob('*opensfm*'):
+                        if pth.is_file() or pth.is_symlink():
+                            pth.unlink()
+                        elif pth.is_dir():
+                            shutil.rmtree(pth)
+                    dest_opensfm = sp_dir / 'opensfm'
+                    shutil.copytree(
+                        opensfm_pkg,
+                        dest_opensfm,
+                        symlinks=True,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc')
+                    )
+                    print(f"  Staged standalone OpenSfM package into {dest_opensfm}")
+
     # 4. Prune development tools, headers, and compiler artifacts
     print("[4/7] Pruning compiler toolchains, headers, and caches...")
     bin_dir = dest_env / 'bin'

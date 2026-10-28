@@ -136,7 +136,7 @@ jobs:
       - name: Compile Native SuperBuild Modules
         if: steps.check_release.outputs.EXISTS == 'false'
         run: |
-          PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          export PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           REPO_ROOT="$(pwd)"
           export PYTHONNOUSERSITE=1
           export CMAKE_BUILD_PARALLEL_LEVEL=3
@@ -300,8 +300,8 @@ jobs:
               patch = (
                   'set (CMAKE_CXX_FLAGS \"\${CMAKE_CXX_FLAGS} \${OpenMP_CXX_FLAGS}\")\n'
                   'if (APPLE)\n'
-                  '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L\$ENV{PREFIX}/lib -lomp\")\n'
-                  '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L\$ENV{PREFIX}/lib -lomp\")\n'
+                  '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L$PREFIX/lib -lomp\")\n'
+                  '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L$PREFIX/lib -lomp\")\n'
                   'endif()'
               )
               if target in c:
@@ -334,12 +334,16 @@ jobs:
                   setup_file.write_text(text)
           "
 
+          # Prevent any cached conda pybind11 headers in $PREFIX/include from shadowing OpenSfM's bundled third_party/pybind11
+          rm -rf "$PREFIX/include/pybind11"
+          rm -rf "$PREFIX/lib/python3.10/site-packages/opensfm"
+
           micromamba run -n odx-build-env /usr/bin/env \
             CC=/usr/bin/clang CXX=/usr/bin/clang++ \
             CFLAGS="-O2 -fPIC -I$PREFIX/include" \
             CXXFLAGS="-O2 -fPIC -stdlib=libc++ -I$PREFIX/include" \
             LDFLAGS="-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib" \
-            CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DCMAKE_INSTALL_RPATH=$PREFIX/lib -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
+            CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
             python -m pip install -v --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
           # Stage all compiled py*.so extension modules into opensfm package directory
@@ -358,6 +362,7 @@ jobs:
               print(f'  - {ext} ({ext.stat().st_size} bytes)')
               dest = pkg_dir / ext.name
               if ext.resolve() != dest.resolve():
+                  dest.unlink(missing_ok=True)
                   shutil.copy2(ext, dest)
                   print(f'    -> Staged to {dest}')
 
@@ -372,28 +377,17 @@ jobs:
           echo "=== OpenSfM extension dynamic dependencies ==="
           otool -L .build/ODX/SuperBuild/install/bin/opensfm/opensfm/py*.so 2>/dev/null || true
 
-          # Ad-hoc sign all OpenSfM shared objects so dyld / macOS arm64 kernel validates signatures
-          find .build/ODX/SuperBuild/install/bin/opensfm/opensfm -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
-
-          # Copy entire opensfm package (Python modules + .so extensions + sensor data) into conda site-packages
-          mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
-          cp -R .build/ODX/SuperBuild/install/bin/opensfm/opensfm/* "$PREFIX/lib/python3.10/site-packages/opensfm/"
-          find "$PREFIX/lib/python3.10/site-packages/opensfm" -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
-
       - name: Smoke Test ODX Environment & CLI
         if: steps.check_release.outputs.EXISTS == 'false'
         run: |
-          PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          export PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           # Increase stack limit to max allowed to prevent OpenMP stack overflow / bus error on macOS arm64
           ulimit -s $(ulimit -Hs) 2>/dev/null || true
 
-          # Ensure all staged .so modules are ad-hoc signed
-          find .build/ODX/SuperBuild/install/bin/opensfm -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
-          find "$PREFIX/lib/python3.10/site-packages/opensfm" -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
-
           echo "=== Testing ODX core Python imports ==="
           micromamba run -n odx-build-env python -u -c "
-          import sys, traceback
+          import faulthandler, sys, traceback
+          faulthandler.enable()
           sys.path.insert(0, '.build/ODX')
           sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
 
@@ -415,15 +409,15 @@ jobs:
           test_module('yaml', lambda: __import__('yaml'))
           test_module('shapely', lambda: __import__('shapely'))
           test_module('pyproj', lambda: __import__('pyproj'))
-          test_module('pillow_jxl', lambda: __import__('pillow_jxl'))
-          test_module('onnxruntime', lambda: __import__('onnxruntime'))
-          test_module('codem', lambda: __import__('codem'))
+          test_module('opensfm', lambda: __import__('opensfm'))
           test_module('opensfm.pygeometry', lambda: __import__('opensfm.pygeometry'))
           test_module('opensfm.pymap', lambda: __import__('opensfm.pymap'))
           test_module('opensfm.pybundle', lambda: __import__('opensfm.pybundle'))
           test_module('opensfm.pysfm', lambda: __import__('opensfm.pysfm'))
           test_module('opensfm.pyrobust', lambda: __import__('opensfm.pyrobust'))
-          test_module('opensfm', lambda: __import__('opensfm'))
+          test_module('pillow_jxl', lambda: __import__('pillow_jxl'))
+          test_module('codem', lambda: __import__('codem'))
+          test_module('onnxruntime', lambda: __import__('onnxruntime'))
           test_module('stages.odm_app', lambda: __import__('stages.odm_app'))
           print('ODX imports verified successfully!', flush=True)
           "
@@ -434,7 +428,7 @@ jobs:
       - name: Relink Mach-O Binaries & Prune Development Headers
         if: steps.check_release.outputs.EXISTS == 'false'
         run: |
-          PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          export PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           python3 Scripts/prepare-distribution-engine.py \
             --runtime "$PREFIX" \
             --odx .build/ODX \
@@ -446,6 +440,10 @@ jobs:
           echo "=== Testing Packaged Standalone Engine Python Runtime ==="
           ulimit -s $(ulimit -Hs) 2>/dev/null || true
           .build/dist/OrthomosaicEngine/environment/bin/python -u -c "
+          import faulthandler, sys
+          faulthandler.enable()
+          sys.path.insert(0, '.build/dist/OrthomosaicEngine/ODX')
+          sys.path.insert(0, '.build/dist/OrthomosaicEngine/ODX/SuperBuild/install/bin/opensfm')
           import cv2
           print('  [+] Standalone cv2 imported successfully from:', cv2.__file__, flush=True)
           from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
