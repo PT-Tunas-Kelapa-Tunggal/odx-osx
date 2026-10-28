@@ -129,7 +129,7 @@ micromamba run -p "$PREFIX" python -m pip install \
 
 micromamba run -p "$PREFIX" python -m pip install \
   --no-deps \
-  ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib
+  ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy
 
 # 4. Pre-clone and patch dem2mesh
 echo ""
@@ -342,8 +342,14 @@ micromamba run -p "$PREFIX" /usr/bin/env \
   CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
   python -m pip install -v --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
-# Ensure compiled .so extension modules are placed into opensfm package directory
-cp .build/ODX/SuperBuild/install/bin/opensfm/build/*.so .build/ODX/SuperBuild/install/bin/opensfm/opensfm/ 2>/dev/null || true
+# Ensure all compiled .so extension modules are placed into opensfm package directory
+find .build/ODX/SuperBuild/install/bin/opensfm -name "*.so" -exec cp -v {} .build/ODX/SuperBuild/install/bin/opensfm/opensfm/ \;
+echo "Staged OpenSfM extension modules in opensfm package:"
+ls -la .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so
+
+# Also stage into conda environment site-packages
+mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
+cp .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so "$PREFIX/lib/python3.10/site-packages/opensfm/" 2>/dev/null || true
 
 # 8. Smoke Tests
 echo ""
@@ -351,6 +357,7 @@ echo "=== Running Smoke Tests ==="
 micromamba run -p "$PREFIX" python -c "
 import sys
 sys.path.insert(0, '.build/ODX')
+sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
 import rasterio
 import cv2
 import numpy
@@ -359,11 +366,11 @@ import PIL
 import yaml
 import shapely
 import pyproj
-from stages.odm_app import ODMApp
-print('[+] ODX core Python imports verified successfully!')
 import opensfm
 from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
 print('[+] OpenSfM extension modules verified successfully!')
+from stages.odm_app import ODMApp
+print('[+] ODX core Python imports verified successfully!')
 "
 
 micromamba run -p "$PREFIX" python .build/ODX/run.py --help > /dev/null
