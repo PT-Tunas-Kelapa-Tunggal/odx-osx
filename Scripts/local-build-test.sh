@@ -278,11 +278,21 @@ from pathlib import Path
 lib_cmake = Path('.build/ODX/SuperBuild/install/bin/opensfm/opensfm/src/lib/CMakeLists.txt')
 if lib_cmake.exists():
     c = lib_cmake.read_text()
-    c = c.replace('if (WIN32)', 'if (WIN32 OR APPLE)')
+    c = c.replace('if (WIN32)\n    set(OPENSFM_HAVE_OPENCL OFF', 'if (WIN32 OR APPLE)\n    set(OPENSFM_HAVE_OPENCL OFF')
     lib_cmake.write_text(c)
     print('  [+] Disabled OpenCL on macOS in OpenSfM')
 
-# 2. Add OpenMP shared linker flags to OpenSfMCommon.cmake
+# 2. Patch tracks_manager.cc for macOS libc++ std::from_chars floating-point limitation
+tm_file = Path('.build/ODX/SuperBuild/install/bin/opensfm/opensfm/src/lib/map/src/tracks_manager.cc')
+if tm_file.exists():
+    t = tm_file.read_text()
+    target = 'double val = 0.0;\n  std::from_chars(sv.data(), sv.data() + sv.size(), val);'
+    replacement = 'char* end = nullptr;\n  double val = std::strtod(std::string(sv).c_str(), &end);'
+    if target in t:
+        tm_file.write_text(t.replace(target, replacement))
+        print('  [+] Patched OpenSfM tracks_manager.cc for macOS floating-point parsing')
+
+# 3. Add OpenMP shared linker flags to OpenSfMCommon.cmake
 common_cmake = Path('.build/ODX/SuperBuild/install/bin/opensfm/opensfm/src/cmake/OpenSfMCommon.cmake')
 if common_cmake.exists():
     c = common_cmake.read_text()
@@ -299,7 +309,7 @@ if common_cmake.exists():
         common_cmake.write_text(c)
         print('  [+] Added OpenMP shared/module linker flags to OpenSfM')
 
-# 3. Patch pyproject.toml and setup.py
+# 4. Patch pyproject.toml and setup.py
 pyproj = Path('.build/ODX/SuperBuild/install/bin/opensfm/pyproject.toml')
 if pyproj.exists():
     text = pyproj.read_text()
@@ -332,6 +342,9 @@ micromamba run -p "$PREFIX" /usr/bin/env \
   CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
   python -m pip install -v --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
+# Ensure compiled .so extension modules are placed into opensfm package directory
+cp .build/ODX/SuperBuild/install/bin/opensfm/build/*.so .build/ODX/SuperBuild/install/bin/opensfm/opensfm/ 2>/dev/null || true
+
 # 8. Smoke Tests
 echo ""
 echo "=== Running Smoke Tests ==="
@@ -348,6 +361,9 @@ import shapely
 import pyproj
 from stages.odm_app import ODMApp
 print('[+] ODX core Python imports verified successfully!')
+import opensfm
+from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
+print('[+] OpenSfM extension modules verified successfully!')
 "
 
 micromamba run -p "$PREFIX" python .build/ODX/run.py --help > /dev/null
