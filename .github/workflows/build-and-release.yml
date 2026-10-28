@@ -94,14 +94,38 @@ jobs:
           PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           export PYTHONNOUSERSITE=1
           
-          # Install build backend tools required by OpenSfM (scikit-build-core & pybind11)
+          # Install and verify all pure-Python and build requirements
           micromamba run -n odx-build-env python -m pip install \
-            scikit-build-core pybind11
+            scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4
 
-          # Install pure-Python dependencies without overriding conda-forge native packages
-          micromamba run -n odx-build-env python -m pip install \
-            --no-deps \
-            ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin
+          # Immediate verification: Ensure every required module is importable right now
+          echo "=== Verifying runtime python module availability ==="
+          micromamba run -n odx-build-env python -c "
+          import sys
+          modules = [
+              'scikit_build_core', 'pybind11', 'exifread', 'vmem', 'pyodm',
+              'pysolar', 'fpdf', 'piexif', 'edt', 'pygltflib', 'rawpy',
+              'pillow_jxl', 'codem', 'onnxruntime', 'cloudpickle', 'networkx',
+              'lz4', 'rasterio', 'fiona', 'shapely', 'pyproj', 'PIL', 'cv2',
+              'scipy', 'numpy', 'yaml', 'joblib', 'skimage', 'matplotlib',
+              'lxml', 'bs4', 'trimesh', 'xmltodict', 'packaging',
+              'requests', 'urllib3', 'six', 'dateutil', 'flask'
+          ]
+          failed = []
+          for mod in modules:
+              try:
+                  __import__(mod)
+                  print(f'  [+] Verified {mod}')
+              except Exception as e:
+                  print(f'  [-] FAILED {mod}: {e}')
+                  failed.append((mod, str(e)))
+          if failed:
+              print(f'CRITICAL: {len(failed)} module(s) missing or failed to import:')
+              for m, err in failed:
+                  print(f'   - {m}: {err}')
+              sys.exit(1)
+          print('[SUCCESS] All required runtime modules verified!')
+          "
 
       - name: Compile Native SuperBuild Modules
         if: steps.check_release.outputs.EXISTS == 'false'
@@ -317,9 +341,9 @@ jobs:
           echo "Staged OpenSfM extension modules in opensfm package:"
           ls -la .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so
 
-          # Also stage into conda environment site-packages
+          # Copy entire opensfm package (Python modules + .so extensions + sensor data) into conda site-packages
           mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
-          cp .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so "$PREFIX/lib/python3.10/site-packages/opensfm/" 2>/dev/null || true
+          cp -R .build/ODX/SuperBuild/install/bin/opensfm/opensfm/* "$PREFIX/lib/python3.10/site-packages/opensfm/"
 
       - name: Smoke Test ODX Environment & CLI
         if: steps.check_release.outputs.EXISTS == 'false'
@@ -342,6 +366,10 @@ jobs:
           print('OpenSfM extension modules verified successfully!')
           import pillow_jxl
           print('pillow_jxl verified successfully!')
+          import onnxruntime
+          print('onnxruntime verified successfully!')
+          import codem
+          print('codem verified successfully!')
           from stages.odm_app import ODMApp
           print('ODX imports verified successfully!')
           "

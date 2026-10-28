@@ -125,11 +125,35 @@ echo "[+] Upstream resolved to commit: $COMMIT"
 echo ""
 echo "=== [2/6] Installing Runtime Dependencies & Build Backends ==="
 micromamba run -p "$PREFIX" python -m pip install \
-  scikit-build-core pybind11
+  scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4
 
-micromamba run -p "$PREFIX" python -m pip install \
-  --no-deps \
-  ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin
+echo "=== Verifying runtime python module availability ==="
+micromamba run -p "$PREFIX" python -c "
+import sys
+modules = [
+    'scikit_build_core', 'pybind11', 'exifread', 'vmem', 'pyodm',
+    'pysolar', 'fpdf', 'piexif', 'edt', 'pygltflib', 'rawpy',
+    'pillow_jxl', 'codem', 'onnxruntime', 'cloudpickle', 'networkx',
+    'lz4', 'rasterio', 'fiona', 'shapely', 'pyproj', 'PIL', 'cv2',
+    'scipy', 'numpy', 'yaml', 'joblib', 'skimage', 'matplotlib',
+    'lxml', 'bs4', 'trimesh', 'xmltodict', 'packaging',
+    'requests', 'urllib3', 'six', 'dateutil', 'flask'
+]
+failed = []
+for mod in modules:
+    try:
+        __import__(mod)
+        print(f'  [+] Verified {mod}')
+    except Exception as e:
+        print(f'  [-] FAILED {mod}: {e}')
+        failed.append((mod, str(e)))
+if failed:
+    print(f'CRITICAL: {len(failed)} module(s) missing or failed to import:')
+    for m, err in failed:
+        print(f'   - {m}: {err}')
+    sys.exit(1)
+print('[SUCCESS] All required runtime modules verified!')
+"
 
 # 4. Pre-clone and patch dem2mesh
 echo ""
@@ -347,9 +371,9 @@ find .build/ODX/SuperBuild/install/bin/opensfm -name "*.so" -exec cp -v {} .buil
 echo "Staged OpenSfM extension modules in opensfm package:"
 ls -la .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so
 
-# Also stage into conda environment site-packages
+# Copy entire opensfm package (Python modules + .so extensions + sensor data) into conda site-packages
 mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
-cp .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so "$PREFIX/lib/python3.10/site-packages/opensfm/" 2>/dev/null || true
+cp -R .build/ODX/SuperBuild/install/bin/opensfm/opensfm/* "$PREFIX/lib/python3.10/site-packages/opensfm/"
 
 # 8. Smoke Tests
 echo ""
@@ -371,6 +395,10 @@ from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
 print('[+] OpenSfM extension modules verified successfully!')
 import pillow_jxl
 print('[+] pillow_jxl verified successfully!')
+import onnxruntime
+print('[+] onnxruntime verified successfully!')
+import codem
+print('[+] codem verified successfully!')
 from stages.odm_app import ODMApp
 print('[+] ODX core Python imports verified successfully!')
 "
