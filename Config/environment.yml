@@ -46,3 +46,4 @@ dependencies:
   - tqdm
   - cloudpickle
   - pybind11
+  - scikit-build-core
