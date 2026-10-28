@@ -94,6 +94,10 @@ jobs:
           PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
           export PYTHONNOUSERSITE=1
           
+          # Install build backend tools required by OpenSfM (scikit-build-core & pybind11)
+          micromamba run -n odx-build-env python -m pip install \
+            scikit-build-core pybind11
+
           # Install pure-Python dependencies without overriding conda-forge native packages
           micromamba run -n odx-build-env python -m pip install \
             --no-deps \
@@ -236,9 +240,17 @@ jobs:
             git -C .build/ODX/SuperBuild/install/bin/opensfm submodule update --init --recursive
           fi
 
-          # Patch OpenSfM setup.py to forward CMAKE_ARGS to cmake configuration
+          # Patch OpenSfM pyproject.toml and setup.py to disable unit tests and configure inplace extensions
           python3 -c "
           from pathlib import Path
+          pyproj = Path('.build/ODX/SuperBuild/install/bin/opensfm/pyproject.toml')
+          if pyproj.exists():
+              text = pyproj.read_text()
+              text = text.replace('OPENSFM_BUILD_TESTS = \"ON\"', 'OPENSFM_BUILD_TESTS = \"OFF\"')
+              text = text.replace('editable.mode = \"redirect\"', 'editable.mode = \"inplace\"')
+              pyproj.write_text(text)
+              print('  [+] Patched OpenSfM pyproject.toml (OPENSFM_BUILD_TESTS=OFF, editable.mode=inplace)')
+
           setup_file = Path('.build/ODX/SuperBuild/install/bin/opensfm/setup.py')
           if setup_file.exists():
               text = setup_file.read_text()

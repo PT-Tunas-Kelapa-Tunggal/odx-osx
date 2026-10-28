@@ -121,9 +121,12 @@ git -C .build/ODX submodule update --init --recursive
 COMMIT="$(git -C .build/ODX rev-parse HEAD)"
 echo "[+] Upstream resolved to commit: $COMMIT"
 
-# 3. Install pure-Python runtime dependencies
+# 3. Install pure-Python runtime dependencies & build backends
 echo ""
-echo "=== [2/6] Installing Runtime Pure-Python Dependencies ==="
+echo "=== [2/6] Installing Runtime Dependencies & Build Backends ==="
+micromamba run -p "$PREFIX" python -m pip install \
+  scikit-build-core pybind11
+
 micromamba run -p "$PREFIX" python -m pip install \
   --no-deps \
   ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib
@@ -267,9 +270,17 @@ if [ ! -f ".build/ODX/SuperBuild/install/bin/opensfm/setup.py" ]; then
   git -C .build/ODX/SuperBuild/install/bin/opensfm submodule update --init --recursive
 fi
 
-# Patch setup.py to forward CMAKE_ARGS
+# Patch pyproject.toml and setup.py to configure inplace extensions and disable unit tests
 python3 -c "
 from pathlib import Path
+pyproj = Path('.build/ODX/SuperBuild/install/bin/opensfm/pyproject.toml')
+if pyproj.exists():
+    text = pyproj.read_text()
+    text = text.replace('OPENSFM_BUILD_TESTS = \"ON\"', 'OPENSFM_BUILD_TESTS = \"OFF\"')
+    text = text.replace('editable.mode = \"redirect\"', 'editable.mode = \"inplace\"')
+    pyproj.write_text(text)
+    print('  [+] Patched OpenSfM pyproject.toml (OPENSFM_BUILD_TESTS=OFF, editable.mode=inplace)')
+
 setup_file = Path('.build/ODX/SuperBuild/install/bin/opensfm/setup.py')
 if setup_file.exists():
     text = setup_file.read_text()
