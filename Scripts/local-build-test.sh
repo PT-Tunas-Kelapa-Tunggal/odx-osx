@@ -372,10 +372,35 @@ micromamba run -p "$PREFIX" /usr/bin/env \
   CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DCMAKE_INSTALL_RPATH=$PREFIX/lib -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
   python -m pip install -v --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
-# Stage compiled .so extension modules into opensfm package directory
-find .build/ODX/SuperBuild/install/bin/opensfm/build -name "*.cpython*.so" -exec cp -f -v {} .build/ODX/SuperBuild/install/bin/opensfm/opensfm/ \; 2>/dev/null || true
-echo "Staged OpenSfM extension modules in opensfm package:"
-ls -la .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so 2>/dev/null || true
+# Stage all compiled py*.so extension modules into opensfm package directory
+python3 -c "
+import shutil, sys
+from pathlib import Path
+
+root = Path('.build/ODX/SuperBuild/install/bin/opensfm')
+pkg_dir = root / 'opensfm'
+pkg_dir.mkdir(parents=True, exist_ok=True)
+
+# Locate all compiled Python extension modules (pybundle, pygeometry, pymap, pysfm, pyrobust)
+extensions = list(root.rglob('py*.so'))
+print(f'Found {len(extensions)} compiled extension candidate(s) in {root}:')
+for ext in extensions:
+    print(f'  - {ext} ({ext.stat().st_size} bytes)')
+    dest = pkg_dir / ext.name
+    if ext.resolve() != dest.resolve():
+        shutil.copy2(ext, dest)
+        print(f'    -> Staged to {dest}')
+
+staged = list(pkg_dir.glob('py*.so'))
+print(f'Total staged OpenSfM extensions in {pkg_dir}: {len(staged)}')
+if not staged:
+    print('CRITICAL: No compiled py*.so extension modules found!')
+    sys.exit(1)
+"
+
+# Inspect extension linkage
+echo "=== OpenSfM extension dynamic dependencies ==="
+otool -L .build/ODX/SuperBuild/install/bin/opensfm/opensfm/py*.so 2>/dev/null || true
 
 # Ad-hoc sign all OpenSfM shared objects so dyld / macOS arm64 kernel validates signatures
 find .build/ODX/SuperBuild/install/bin/opensfm/opensfm -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
@@ -421,12 +446,12 @@ test_module('pyproj', lambda: __import__('pyproj'))
 test_module('pillow_jxl', lambda: __import__('pillow_jxl'))
 test_module('onnxruntime', lambda: __import__('onnxruntime'))
 test_module('codem', lambda: __import__('codem'))
-test_module('opensfm', lambda: __import__('opensfm'))
 test_module('opensfm.pygeometry', lambda: __import__('opensfm.pygeometry'))
 test_module('opensfm.pymap', lambda: __import__('opensfm.pymap'))
 test_module('opensfm.pybundle', lambda: __import__('opensfm.pybundle'))
 test_module('opensfm.pysfm', lambda: __import__('opensfm.pysfm'))
 test_module('opensfm.pyrobust', lambda: __import__('opensfm.pyrobust'))
+test_module('opensfm', lambda: __import__('opensfm'))
 test_module('stages.odm_app', lambda: __import__('stages.odm_app'))
 print('ODX imports verified successfully!', flush=True)
 "
