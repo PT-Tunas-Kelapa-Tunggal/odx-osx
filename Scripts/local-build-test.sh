@@ -330,8 +330,8 @@ if common_cmake.exists():
     patch = (
         'set (CMAKE_CXX_FLAGS \"\${CMAKE_CXX_FLAGS} \${OpenMP_CXX_FLAGS}\")\n'
         'if (APPLE)\n'
-        '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L$PREFIX/lib -lomp\")\n'
-        '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L$PREFIX/lib -lomp\")\n'
+        '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L$ENV{PREFIX}/lib -lomp\")\n'
+        '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L$ENV{PREFIX}/lib -lomp\")\n'
         'endif()'
     )
     if target in c:
@@ -369,47 +369,69 @@ micromamba run -p "$PREFIX" /usr/bin/env \
   CFLAGS="-O2 -fPIC -I$PREFIX/include" \
   CXXFLAGS="-O2 -fPIC -stdlib=libc++ -I$PREFIX/include" \
   LDFLAGS="-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib" \
-  CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
+  CMAKE_ARGS="-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_PREFIX_PATH=$PREFIX -DOpenMP_ROOT=$PREFIX -DCMAKE_INSTALL_RPATH=$PREFIX/lib -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DOPENSFM_BUILD_TESTS=OFF -DOPENSFM_HAVE_OPENCL=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0" \
   python -m pip install -v --no-deps --no-build-isolation -e .build/ODX/SuperBuild/install/bin/opensfm
 
-# Ensure all compiled .so extension modules are placed into opensfm package directory
-find .build/ODX/SuperBuild/install/bin/opensfm -name "*.so" -exec cp -v {} .build/ODX/SuperBuild/install/bin/opensfm/opensfm/ \;
+# Stage compiled .so extension modules into opensfm package directory
+find .build/ODX/SuperBuild/install/bin/opensfm/build -name "*.cpython*.so" -exec cp -f -v {} .build/ODX/SuperBuild/install/bin/opensfm/opensfm/ \; 2>/dev/null || true
 echo "Staged OpenSfM extension modules in opensfm package:"
-ls -la .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so
+ls -la .build/ODX/SuperBuild/install/bin/opensfm/opensfm/*.so 2>/dev/null || true
+
+# Ad-hoc sign all OpenSfM shared objects so dyld / macOS arm64 kernel validates signatures
+find .build/ODX/SuperBuild/install/bin/opensfm/opensfm -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
 
 # Copy entire opensfm package (Python modules + .so extensions + sensor data) into conda site-packages
 mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
 cp -R .build/ODX/SuperBuild/install/bin/opensfm/opensfm/* "$PREFIX/lib/python3.10/site-packages/opensfm/"
+find "$PREFIX/lib/python3.10/site-packages/opensfm" -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
 
 # 8. Smoke Tests
 echo ""
 echo "=== Running Smoke Tests ==="
-micromamba run -p "$PREFIX" python -c "
-import sys
+# Increase stack limit to prevent OpenMP stack overflow / bus error on macOS arm64
+ulimit -s 65536
+
+# Ensure all staged .so modules are ad-hoc signed
+find .build/ODX/SuperBuild/install/bin/opensfm -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
+find "$PREFIX/lib/python3.10/site-packages/opensfm" -name "*.so" -exec codesign -s - -f {} \; 2>/dev/null || true
+
+micromamba run -p "$PREFIX" python -u -c "
+import sys, traceback
 sys.path.insert(0, '.build/ODX')
 sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
-import rasterio
-import cv2
-import numpy
-import scipy
-import PIL
-import yaml
-import shapely
-import pyproj
-import opensfm
-from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
-print('[+] OpenSfM extension modules verified successfully!')
-import pillow_jxl
-print('[+] pillow_jxl verified successfully!')
-import onnxruntime
-print('[+] onnxruntime verified successfully!')
-import codem
-print('[+] codem verified successfully!')
-from stages.odm_app import ODMApp
-print('[+] ODX core Python imports verified successfully!')
+
+def test_module(name, fn):
+    print(f'--> Testing {name}...', flush=True)
+    try:
+        fn()
+        print(f'    [+] {name} PASSED', flush=True)
+    except Exception as e:
+        print(f'    [-] {name} FAILED: {e}', flush=True)
+        traceback.print_exc()
+        sys.exit(1)
+
+test_module('rasterio', lambda: __import__('rasterio'))
+test_module('cv2', lambda: __import__('cv2'))
+test_module('numpy', lambda: __import__('numpy'))
+test_module('scipy', lambda: __import__('scipy'))
+test_module('PIL', lambda: __import__('PIL'))
+test_module('yaml', lambda: __import__('yaml'))
+test_module('shapely', lambda: __import__('shapely'))
+test_module('pyproj', lambda: __import__('pyproj'))
+test_module('pillow_jxl', lambda: __import__('pillow_jxl'))
+test_module('onnxruntime', lambda: __import__('onnxruntime'))
+test_module('codem', lambda: __import__('codem'))
+test_module('opensfm', lambda: __import__('opensfm'))
+test_module('opensfm.pygeometry', lambda: __import__('opensfm.pygeometry'))
+test_module('opensfm.pymap', lambda: __import__('opensfm.pymap'))
+test_module('opensfm.pybundle', lambda: __import__('opensfm.pybundle'))
+test_module('opensfm.pysfm', lambda: __import__('opensfm.pysfm'))
+test_module('opensfm.pyrobust', lambda: __import__('opensfm.pyrobust'))
+test_module('stages.odm_app', lambda: __import__('stages.odm_app'))
+print('ODX imports verified successfully!', flush=True)
 "
 
-micromamba run -p "$PREFIX" python .build/ODX/run.py --help > /dev/null
+micromamba run -p "$PREFIX" python -u .build/ODX/run.py --help
 echo "[+] ODX CLI entrypoint verified successfully!"
 
 # 9. Optional Packaging
@@ -425,13 +447,14 @@ if [ "$DO_PACKAGE" = true ]; then
     --adhoc
 
   echo "=== Testing Packaged Standalone Engine Python Runtime ==="
-  .build/dist/OrthomosaicEngine/environment/bin/python -c "
+  ulimit -s 65536
+  .build/dist/OrthomosaicEngine/environment/bin/python -u -c "
   import cv2
-  print('  [+] Standalone cv2 imported successfully from:', cv2.__file__)
+  print('  [+] Standalone cv2 imported successfully from:', cv2.__file__, flush=True)
   from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
-  print('  [+] Standalone OpenSfM extensions imported successfully!')
+  print('  [+] Standalone OpenSfM extensions imported successfully!', flush=True)
   from stages.odm_app import ODMApp
-  print('  [+] Standalone ODMApp imported successfully!')
+  print('  [+] Standalone ODMApp imported successfully!', flush=True)
   "
 
   cd .build/dist
