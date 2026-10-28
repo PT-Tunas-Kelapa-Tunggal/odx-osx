@@ -101,7 +101,7 @@ jobs:
           # Install pure-Python dependencies without overriding conda-forge native packages
           micromamba run -n odx-build-env python -m pip install \
             --no-deps \
-            ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy
+            ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin
 
       - name: Compile Native SuperBuild Modules
         if: steps.check_release.outputs.EXISTS == 'false'
@@ -340,6 +340,8 @@ jobs:
           import opensfm
           from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
           print('OpenSfM extension modules verified successfully!')
+          import pillow_jxl
+          print('pillow_jxl verified successfully!')
           from stages.odm_app import ODMApp
           print('ODX imports verified successfully!')
           "

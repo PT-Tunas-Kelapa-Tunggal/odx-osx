@@ -129,7 +129,7 @@ micromamba run -p "$PREFIX" python -m pip install \
 
 micromamba run -p "$PREFIX" python -m pip install \
   --no-deps \
-  ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy
+  ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin
 
 # 4. Pre-clone and patch dem2mesh
 echo ""
@@ -369,6 +369,8 @@ import pyproj
 import opensfm
 from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
 print('[+] OpenSfM extension modules verified successfully!')
+import pillow_jxl
+print('[+] pillow_jxl verified successfully!')
 from stages.odm_app import ODMApp
 print('[+] ODX core Python imports verified successfully!')
 "
