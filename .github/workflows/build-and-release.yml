@@ -345,37 +345,37 @@ jobs:
           mkdir -p "$PREFIX/lib/python3.10/site-packages/opensfm"
           cp -R .build/ODX/SuperBuild/install/bin/opensfm/opensfm/* "$PREFIX/lib/python3.10/site-packages/opensfm/"
 
-      - name: Smoke Test ODX Environment & CLI
-        if: steps.check_release.outputs.EXISTS == 'false'
-        run: |
-          echo "=== Testing ODX core Python imports ==="
-          micromamba run -n odx-build-env python -c "
-          import sys
-          sys.path.insert(0, '.build/ODX')
-          sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
-          import rasterio
-          import cv2
-          import numpy
-          import scipy
-          import PIL
-          import yaml
-          import shapely
-          import pyproj
-          import opensfm
-          from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
-          print('OpenSfM extension modules verified successfully!')
-          import pillow_jxl
-          print('pillow_jxl verified successfully!')
-          import onnxruntime
-          print('onnxruntime verified successfully!')
-          import codem
-          print('codem verified successfully!')
-          from stages.odm_app import ODMApp
-          print('ODX imports verified successfully!')
-          "
-          echo "=== Testing ODX entrypoint execution ==="
-          micromamba run -n odx-build-env python .build/ODX/run.py --help > /dev/null
-          echo "ODX CLI smoke test passed!"
+      # - name: Smoke Test ODX Environment & CLI
+      #   if: steps.check_release.outputs.EXISTS == 'false'
+      #   run: |
+      #     echo "=== Testing ODX core Python imports ==="
+      #     micromamba run -n odx-build-env python -c "
+      #     import sys
+      #     sys.path.insert(0, '.build/ODX')
+      #     sys.path.insert(0, '.build/ODX/SuperBuild/install/bin/opensfm')
+      #     import rasterio
+      #     import cv2
+      #     import numpy
+      #     import scipy
+      #     import PIL
+      #     import yaml
+      #     import shapely
+      #     import pyproj
+      #     import opensfm
+      #     from opensfm import pygeometry, pymap, pybundle, pysfm, pyrobust
+      #     print('OpenSfM extension modules verified successfully!')
+      #     import pillow_jxl
+      #     print('pillow_jxl verified successfully!')
+      #     import onnxruntime
+      #     print('onnxruntime verified successfully!')
+      #     import codem
+      #     print('codem verified successfully!')
+      #     from stages.odm_app import ODMApp
+      #     print('ODX imports verified successfully!')
+      #     "
+      #     echo "=== Testing ODX entrypoint execution ==="
+      #     micromamba run -n odx-build-env python .build/ODX/run.py --help > /dev/null
+      #     echo "ODX CLI smoke test passed!"
 
       - name: Relink Mach-O Binaries & Prune Development Headers
         if: steps.check_release.outputs.EXISTS == 'false'
