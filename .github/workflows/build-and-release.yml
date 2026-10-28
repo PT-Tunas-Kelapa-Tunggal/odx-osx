@@ -429,6 +429,7 @@ jobs:
         if: steps.check_release.outputs.EXISTS == 'false'
         run: |
           export PREFIX="$MAMBA_ROOT_PREFIX/envs/odx-build-env"
+          export PYTHONNOUSERSITE=1
           python3 Scripts/prepare-distribution-engine.py \
             --runtime "$PREFIX" \
             --odx .build/ODX \

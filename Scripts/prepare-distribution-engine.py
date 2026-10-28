@@ -35,6 +35,9 @@ def is_macho(path: Path) -> bool:
 
 
 def main():
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', required=True, type=Path, help='Path to conda/micromamba build prefix')
     parser.add_argument('--odx', required=True, type=Path, help='Path to built ODX checkout')
@@ -153,16 +156,34 @@ def main():
     for static_lib in engine_dir.rglob('*.a'):
         static_lib.unlink()
 
+    prefix_variants = list(dict.fromkeys([
+        str(original_prefix),
+        os.path.abspath(str(args.runtime)),
+    ]))
+    odx_variants = list(dict.fromkeys([
+        str(odx_src),
+        os.path.abspath(str(args.odx)),
+    ]))
+
+    def map_to_dest(raw_path: str):
+        for variants, dst_root in ((prefix_variants, dest_env), (odx_variants, dest_odx)):
+            for src_str in variants:
+                if raw_path == src_str:
+                    return dst_root
+                if raw_path.startswith(src_str + '/'):
+                    return dst_root / Path(raw_path[len(src_str) + 1:])
+        return None
+
     # 5. Make symlinks relative
     print("[5/7] Normalizing symlinks to relative targets...")
     for link in engine_dir.rglob('*'):
         if link.is_symlink():
             try:
                 target = os.readlink(link)
-                if target.startswith(str(original_prefix) + '/'):
-                    dest = dest_env / Path(target).relative_to(original_prefix)
+                mapped = map_to_dest(target)
+                if mapped is not None:
                     link.unlink()
-                    link.symlink_to(os.path.relpath(dest, link.parent))
+                    link.symlink_to(os.path.relpath(mapped, link.parent))
             except Exception as e:
                 print(f"  Warning: Could not process symlink {link}: {e}")
 
@@ -174,8 +195,12 @@ def main():
             for cfg in cv2_dir.glob('config*.py'):
                 try:
                     text = cfg.read_text(encoding='utf-8')
-                    if str(original_prefix) in text:
-                        text = text.replace(str(original_prefix), str(dest_env))
+                    modified = False
+                    for variant in prefix_variants:
+                        if variant in text:
+                            text = text.replace(variant, str(dest_env))
+                            modified = True
+                    if modified:
                         cfg.write_text(text, encoding='utf-8')
                         print(f"    Patched prefix in {cfg.name}")
                 except Exception as e:
@@ -244,38 +269,99 @@ BINARIES_PATHS = _extra_bin_paths + [
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
 </dict>
 </plist>
 """)
 
+    # Standalone runtime entitlements for environment/bin/python (no app-sandbox/inherit
+    # so it can also run outside a sandboxed parent process without libsystem_secinit SIGTRAP 133)
+    runtime_entitlements_path = output_dir / 'Runtime.entitlements'
+    runtime_entitlements_path.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
+""")
+
+    dest_lib_resolved = str((dest_env / 'lib').resolve())
+
     for index, path in enumerate(binaries):
+        try:
+            path.chmod(path.stat().st_mode | 0o200)
+        except Exception:
+            pass
+
         # Set install name if absolute
         identifiers = [
-            line for line in run('/usr/bin/otool', '-D', str(path)).splitlines()
+            line.strip() for line in run('/usr/bin/otool', '-D', str(path)).splitlines()
             if line and not line.endswith(':') and '(architecture ' not in line
         ]
         identifier = identifiers[-1] if identifiers else None
         if identifier and identifier.startswith('/'):
             run('/usr/bin/install_name_tool', '-id', '@rpath/' + path.name, str(path))
 
-        # Rewrite absolute LC_RPATHs to relative @loader_path
+        # Deduplicate and rewrite absolute LC_RPATHs to relative @loader_path
         commands = run('/usr/bin/otool', '-l', str(path))
         rpaths = re.findall(r'cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset', commands)
-        for old in dict.fromkeys(rpaths):
-            if old.startswith(str(original_prefix) + '/'):
-                mapped = dest_env / Path(old).relative_to(original_prefix)
+        active_rpaths = []
+        for r in rpaths:
+            if r in active_rpaths:
+                run('/usr/bin/install_name_tool', '-delete_rpath', r, str(path))
+            else:
+                active_rpaths.append(r)
+
+        for old in list(active_rpaths):
+            mapped = map_to_dest(old)
+            if mapped is not None:
                 new = '@loader_path/' + os.path.relpath(mapped, path.parent)
-                run('/usr/bin/install_name_tool', '-rpath', old, new, str(path))
+                if new in active_rpaths and new != old:
+                    run('/usr/bin/install_name_tool', '-delete_rpath', old, str(path))
+                    active_rpaths.remove(old)
+                elif new != old:
+                    run('/usr/bin/install_name_tool', '-rpath', old, new, str(path))
+                    active_rpaths[active_rpaths.index(old)] = new
 
         # Rewrite dependent dylibs to relative @loader_path
+        has_rpath_dep = False
         for line in run('/usr/bin/otool', '-L', str(path)).splitlines()[1:]:
             if not line.startswith('\t'):
                 continue
             dep = line.strip().split(' (compatibility')[0]
-            if dep.startswith(str(original_prefix) + '/'):
-                mapped = dest_env / Path(dep).relative_to(original_prefix)
+            if dep.startswith('@rpath/'):
+                has_rpath_dep = True
+            mapped = map_to_dest(dep)
+            if mapped is not None:
                 new = '@loader_path/' + os.path.relpath(mapped, path.parent)
                 run('/usr/bin/install_name_tool', '-change', dep, new, str(path))
+
+        # Ensure binaries with @rpath dependencies have an LC_RPATH pointing to environment/lib
+        if has_rpath_dep:
+            lib_rpath = '@loader_path/' + os.path.relpath(dest_env / 'lib', path.parent)
+            has_lib_rpath = lib_rpath in active_rpaths or any(
+                os.path.normpath(os.path.join(str(path.parent), r[len('@loader_path'):].lstrip('/'))) == dest_lib_resolved
+                for r in active_rpaths if r.startswith('@loader_path')
+            )
+            if not has_lib_rpath:
+                try:
+                    run('/usr/bin/install_name_tool', '-add_rpath', lib_rpath, str(path))
+                    active_rpaths.append(lib_rpath)
+                except Exception:
+                    pass
 
         # Codesign the binary
         sign_cmd = ['/usr/bin/codesign', '--force', '--sign', identity]
@@ -288,12 +374,14 @@ BINARIES_PATHS = _extra_bin_paths + [
             sign_cmd += [
                 '--options', 'runtime',
                 '--identifier', 'com.hata.ControlDroneMapping.engine.python',
-                '--entitlements', str(entitlements_path),
+                '--entitlements', str(runtime_entitlements_path),
             ]
         run(*(sign_cmd + [str(path)]))
 
         if (index + 1) % 50 == 0 or (index + 1) == len(binaries):
             print(f"  Processed {index + 1}/{len(binaries)} binaries...")
+
+    runtime_entitlements_path.unlink(missing_ok=True)
 
     # Stage OrthomosaicPython helper executable
     helper_dest = output_dir / 'OrthomosaicPython'
