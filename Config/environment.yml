@@ -39,6 +39,8 @@ dependencies:
   - python-dateutil
   - flask
   - requests
+  - requests-toolbelt
+  - dataclasses-json
   - urllib3
   - six
   - tqdm

@@ -97,7 +97,8 @@ jobs:
           # Install and verify all pure-Python and build requirements without overriding conda-forge native packages
           micromamba run -n odx-build-env python -m pip install \
             --no-deps \
-            scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4
+            scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4 \
+            requests-toolbelt dataclasses-json marshmallow typing-inspect mypy-extensions
 
           # Immediate verification: Ensure every required module is importable right now
           echo "=== Verifying runtime python module availability ==="
@@ -105,6 +106,7 @@ jobs:
           import sys
           modules = [
               'scikit_build_core', 'pybind11', 'exifread', 'vmem', 'pyodm',
+              'requests_toolbelt', 'dataclasses_json',
               'pysolar', 'fpdf', 'piexif', 'edt', 'pygltflib', 'rawpy',
               'pillow_jxl', 'codem', 'onnxruntime', 'cloudpickle', 'networkx',
               'lz4', 'rasterio', 'fiona', 'shapely', 'pyproj', 'PIL', 'cv2',

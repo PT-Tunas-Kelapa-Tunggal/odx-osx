@@ -126,13 +126,15 @@ echo ""
 echo "=== [2/6] Installing Runtime Dependencies & Build Backends ==="
 micromamba run -p "$PREFIX" python -m pip install \
   --no-deps \
-  scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4
+  scikit-build-core pybind11 ODMExifRead vmem pyodm Pysolar fpdf2 piexif edt pygltflib rawpy pillow-jxl-plugin codem onnxruntime rerun-sdk==0.27.2 lz4 \
+  requests-toolbelt dataclasses-json marshmallow typing-inspect mypy-extensions
 
 echo "=== Verifying runtime python module availability ==="
 micromamba run -p "$PREFIX" python -c "
 import sys
 modules = [
     'scikit_build_core', 'pybind11', 'exifread', 'vmem', 'pyodm',
+    'requests_toolbelt', 'dataclasses_json',
     'pysolar', 'fpdf', 'piexif', 'edt', 'pygltflib', 'rawpy',
     'pillow_jxl', 'codem', 'onnxruntime', 'cloudpickle', 'networkx',
     'lz4', 'rasterio', 'fiona', 'shapely', 'pyproj', 'PIL', 'cv2',
