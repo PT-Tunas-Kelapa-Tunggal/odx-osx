@@ -330,8 +330,8 @@ if common_cmake.exists():
     patch = (
         'set (CMAKE_CXX_FLAGS \"\${CMAKE_CXX_FLAGS} \${OpenMP_CXX_FLAGS}\")\n'
         'if (APPLE)\n'
-        '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L$ENV{PREFIX}/lib -lomp\")\n'
-        '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L$ENV{PREFIX}/lib -lomp\")\n'
+        '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L\$ENV{PREFIX}/lib -lomp\")\n'
+        '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L\$ENV{PREFIX}/lib -lomp\")\n'
         'endif()'
     )
     if target in c:

@@ -296,12 +296,12 @@ jobs:
           common_cmake = Path('.build/ODX/SuperBuild/install/bin/opensfm/opensfm/src/cmake/OpenSfMCommon.cmake')
           if common_cmake.exists():
               c = common_cmake.read_text()
-              target = 'set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")'
+              target = 'set (CMAKE_CXX_FLAGS \"\${CMAKE_CXX_FLAGS} \${OpenMP_CXX_FLAGS}\")'
               patch = (
-                  'set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")\n'
+                  'set (CMAKE_CXX_FLAGS \"\${CMAKE_CXX_FLAGS} \${OpenMP_CXX_FLAGS}\")\n'
                   'if (APPLE)\n'
-                  '  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L$ENV{PREFIX}/lib -lomp")\n'
-                  '  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -L$ENV{PREFIX}/lib -lomp")\n'
+                  '  set(CMAKE_SHARED_LINKER_FLAGS \"\${CMAKE_SHARED_LINKER_FLAGS} -L\$ENV{PREFIX}/lib -lomp\")\n'
+                  '  set(CMAKE_MODULE_LINKER_FLAGS \"\${CMAKE_MODULE_LINKER_FLAGS} -L\$ENV{PREFIX}/lib -lomp\")\n'
                   'endif()'
               )
               if target in c:
@@ -313,8 +313,8 @@ jobs:
           pyproj = Path('.build/ODX/SuperBuild/install/bin/opensfm/pyproject.toml')
           if pyproj.exists():
               text = pyproj.read_text()
-              text = text.replace('OPENSFM_BUILD_TESTS = "ON"', 'OPENSFM_BUILD_TESTS = "OFF"')
-              text = text.replace('editable.mode = "redirect"', 'editable.mode = "inplace"')
+              text = text.replace('OPENSFM_BUILD_TESTS = \"ON\"', 'OPENSFM_BUILD_TESTS = \"OFF\"')
+              text = text.replace('editable.mode = \"redirect\"', 'editable.mode = \"inplace\"')
               pyproj.write_text(text)
               print('  [+] Patched OpenSfM pyproject.toml (OPENSFM_BUILD_TESTS=OFF, editable.mode=inplace)')
 
@@ -325,11 +325,11 @@ jobs:
                   text = text.replace('import subprocess', 'import subprocess\nimport shlex')
                   text = text.replace(
                       'cmake_command = [',
-                      'cmake_command = ["cmake"] + shlex.split(os.environ.get("CMAKE_ARGS", "")) + ['
+                      'cmake_command = [\"cmake\"] + shlex.split(os.environ.get(\"CMAKE_ARGS\", \"\")) + ['
                   )
                   text = text.replace(
-                      '["cmake"] + shlex.split(os.environ.get("CMAKE_ARGS", "")) + [\n        "cmake",',
-                      '["cmake"] + shlex.split(os.environ.get("CMAKE_ARGS", "")) + ['
+                      '[\"cmake\"] + shlex.split(os.environ.get(\"CMAKE_ARGS\", \"\")) + [\n        \"cmake\",',
+                      '[\"cmake\"] + shlex.split(os.environ.get(\"CMAKE_ARGS\", \"\")) + ['
                   )
                   setup_file.write_text(text)
           "
